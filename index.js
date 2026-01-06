@@ -148,14 +148,10 @@ async function forwardMessage(message, sourceChannel) {
 
     if (hasMedia) {
       try {
-        // Скачиваем медиа в буфер
-        const mediaBuffer = await client.downloadMedia(message, {
-          workers: 1,
-        });
-
-        // Отправляем медиа с отформатированным текстом
+        // Используем медиа напрямую из исходного сообщения (без скачивания)
+        // Это создаст новое сообщение без метки "Переслано"
         await client.sendFile(TARGET_CHANNEL_ID, {
-          file: mediaBuffer,
+          file: message.media,
           caption: formattedText,
           parseMode: "markdown", // Используем markdown для ссылок
         });
@@ -164,20 +160,33 @@ async function forwardMessage(message, sourceChannel) {
         console.log(`✅ Отправлено (${mediaType}) из ${sourceChannel}: ${originalText ? originalText.substring(0, 50) + "..." : "медиа без текста"}`);
       } catch (mediaError) {
         console.error(`❌ Ошибка при обработке медиа:`, mediaError.message);
-        // Если не удалось отправить с медиа, отправляем только текст
-        if (formattedText) {
-          try {
-            await client.sendMessage(TARGET_CHANNEL_ID, {
-              message: formattedText,
-              parseMode: "markdown",
-            });
-            console.log(`✅ Отправлено (только текст, медиа не удалось) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
-          } catch (textError) {
-            // Если markdown не работает, отправляем без форматирования
-            await client.sendMessage(TARGET_CHANNEL_ID, {
-              message: formattedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1'),
-            });
-            console.log(`✅ Отправлено (только текст, без markdown) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+        // Если не удалось отправить с медиа напрямую, пробуем скачать
+        try {
+          const mediaBuffer = await client.downloadMedia(message, {
+            workers: 1,
+          });
+          await client.sendFile(TARGET_CHANNEL_ID, {
+            file: mediaBuffer,
+            caption: formattedText,
+            parseMode: "markdown",
+          });
+          console.log(`✅ Отправлено (медиа скачано) из ${sourceChannel}: ${originalText ? originalText.substring(0, 50) + "..." : "медиа без текста"}`);
+        } catch (downloadError) {
+          // Если и скачивание не помогло, отправляем только текст
+          if (formattedText) {
+            try {
+              await client.sendMessage(TARGET_CHANNEL_ID, {
+                message: formattedText,
+                parseMode: "markdown",
+              });
+              console.log(`✅ Отправлено (только текст, медиа не удалось) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+            } catch (textError) {
+              // Если markdown не работает, отправляем без форматирования
+              await client.sendMessage(TARGET_CHANNEL_ID, {
+                message: formattedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1'),
+              });
+              console.log(`✅ Отправлено (только текст, без markdown) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+            }
           }
         }
       }
