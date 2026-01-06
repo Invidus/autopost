@@ -23,6 +23,9 @@ const KEYWORDS_FILTER = process.env.KEYWORDS_FILTER
 const EXCLUDE_WORDS = process.env.EXCLUDE_WORDS
   ? process.env.EXCLUDE_WORDS.split(",").map(s => s.trim().toLowerCase())
   : [];
+const FOOTER_TEXT = process.env.FOOTER_TEXT || "Смотреть больше приколов 👉 ";
+const FOOTER_LINK_TEXT = process.env.FOOTER_LINK_TEXT || "кликай";
+const FOOTER_LINK_URL = process.env.FOOTER_LINK_URL || "https://t.me/memeitochka";
 
 // Проверка обязательных переменных
 if (!API_ID || !API_HASH || !TARGET_CHANNEL_ID || !SOURCE_CHANNELS.length) {
@@ -79,7 +82,46 @@ function getMessageText(message) {
   return "";
 }
 
-// Функция для пересылки сообщения
+// Функция для очистки текста от ссылок
+function cleanTextFromLinks(text) {
+  if (!text) return "";
+
+  // Удаляем markdown ссылки [текст](url)
+  text = text.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1');
+
+  // Удаляем HTML ссылки <a href="url">текст</a>
+  text = text.replace(/<a[^>]+href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi, '$2');
+
+  // Удаляем простые URL (http://, https://, t.me/)
+  text = text.replace(/https?:\/\/[^\s\)]+/gi, '');
+  text = text.replace(/t\.me\/[^\s\)]+/gi, '');
+
+  // Удаляем упоминания каналов @channel
+  text = text.replace(/@[a-zA-Z0-9_]+/g, '');
+
+  // Удаляем лишние пробелы (но сохраняем переносы строк)
+  text = text.replace(/[ \t]+/g, ' ');
+  text = text.replace(/\n\s*\n\s*\n/g, '\n\n'); // Максимум 2 переноса подряд
+  text = text.trim();
+
+  return text;
+}
+
+// Функция для форматирования текста с добавлением ссылки внизу
+function formatTextWithFooter(originalText) {
+  // Очищаем текст от ссылок
+  let cleanedText = cleanTextFromLinks(originalText);
+
+  // Если текст пустой, возвращаем только футер
+  if (!cleanedText || cleanedText.trim() === '') {
+    return `${FOOTER_TEXT}[${FOOTER_LINK_TEXT}](${FOOTER_LINK_URL})`;
+  }
+
+  // Добавляем футер внизу с markdown ссылкой (без пробела между текстом и ссылкой)
+  return `${cleanedText}\n\n${FOOTER_TEXT}[${FOOTER_LINK_TEXT}](${FOOTER_LINK_URL})`;
+}
+
+// Функция для создания нового сообщения с копированием медиа и текста
 async function forwardMessage(message, sourceChannel) {
   try {
     const messageId = message.id;
@@ -90,22 +132,75 @@ async function forwardMessage(message, sourceChannel) {
       return;
     }
 
-    const messageText = getMessageText(message);
+    const originalText = getMessageText(message);
 
-    // Проверка фильтров
-    if (!matchesFilter(messageText)) {
-      console.log(`⏭️  Пропущено (не соответствует фильтру): ${messageText.substring(0, 50)}...`);
+    // Проверка фильтров (по оригинальному тексту)
+    if (!matchesFilter(originalText)) {
+      console.log(`⏭️  Пропущено (не соответствует фильтру): ${originalText.substring(0, 50)}...`);
       return;
     }
 
-    // Пересылка сообщения
-    await client.forwardMessages(TARGET_CHANNEL_ID, {
-      messages: [messageId],
-      fromPeer: sourceChannel,
-    });
+    // Форматируем текст: очищаем от ссылок и добавляем футер
+    const formattedText = formatTextWithFooter(originalText);
+
+    // Проверяем наличие медиа в сообщении
+    const hasMedia = message.media && !message.media.className?.includes("MessageMediaEmpty");
+
+    if (hasMedia) {
+      try {
+        // Скачиваем медиа в буфер
+        const mediaBuffer = await client.downloadMedia(message, {
+          workers: 1,
+        });
+
+        // Отправляем медиа с отформатированным текстом
+        await client.sendFile(TARGET_CHANNEL_ID, {
+          file: mediaBuffer,
+          caption: formattedText,
+          parseMode: "markdown", // Используем markdown для ссылок
+        });
+
+        const mediaType = message.media.className || "медиа";
+        console.log(`✅ Отправлено (${mediaType}) из ${sourceChannel}: ${originalText ? originalText.substring(0, 50) + "..." : "медиа без текста"}`);
+      } catch (mediaError) {
+        console.error(`❌ Ошибка при обработке медиа:`, mediaError.message);
+        // Если не удалось отправить с медиа, отправляем только текст
+        if (formattedText) {
+          try {
+            await client.sendMessage(TARGET_CHANNEL_ID, {
+              message: formattedText,
+              parseMode: "markdown",
+            });
+            console.log(`✅ Отправлено (только текст, медиа не удалось) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+          } catch (textError) {
+            // Если markdown не работает, отправляем без форматирования
+            await client.sendMessage(TARGET_CHANNEL_ID, {
+              message: formattedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1'),
+            });
+            console.log(`✅ Отправлено (только текст, без markdown) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+          }
+        }
+      }
+    } else {
+      // Только текст без медиа
+      if (formattedText) {
+        try {
+          await client.sendMessage(TARGET_CHANNEL_ID, {
+            message: formattedText,
+            parseMode: "markdown",
+          });
+          console.log(`✅ Отправлено (текст) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+        } catch (textError) {
+          // Если markdown не работает, отправляем без форматирования
+          await client.sendMessage(TARGET_CHANNEL_ID, {
+            message: formattedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1'),
+          });
+          console.log(`✅ Отправлено (текст, без markdown) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+        }
+      }
+    }
 
     postedMessages.add(messageKey);
-    console.log(`✅ Отправлено из ${sourceChannel}: ${messageText.substring(0, 50)}...`);
 
     // Ограничение размера Set (чтобы не занимать много памяти)
     if (postedMessages.size > 10000) {
@@ -117,7 +212,7 @@ async function forwardMessage(message, sourceChannel) {
     await new Promise(resolve => setTimeout(resolve, POST_DELAY * 1000));
 
   } catch (error) {
-    console.error(`❌ Ошибка при пересылке сообщения:`, error.message);
+    console.error(`❌ Ошибка при отправке сообщения:`, error.message);
   }
 }
 
