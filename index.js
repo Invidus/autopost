@@ -337,35 +337,21 @@ async function forwardMessage(message, sourceChannel) {
   }
 }
 
-// Функция для мониторинга канала
-async function monitorChannel(channelId) {
+// Функция для получения последнего сообщения из канала
+async function getLastMessageFromChannel(channelId) {
   try {
-    console.log(`👀 Начинаю мониторинг канала: ${channelId}`);
-
-    // Получаем последние сообщения
+    // Получаем только последнее сообщение
     const messages = await client.getMessages(channelId, {
-      limit: 10,
+      limit: 1,
     });
 
-    // Обрабатываем сообщения в обратном порядке (от старых к новым)
-    for (const message of messages.reverse()) {
-      await forwardMessage(message, channelId);
+    if (messages && messages.length > 0) {
+      return messages[0]; // Возвращаем самое последнее сообщение
     }
-
-    // Подписываемся на новые сообщения
-    client.addEventHandler(async (event) => {
-      const message = event.message;
-      if (message && message.peerId && message.peerId.channelId) {
-        const channel = await client.getEntity(message.peerId);
-        if (channel.username === channelId.replace("@", "") ||
-            channel.id.toString() === channelId.replace("-100", "")) {
-          await forwardMessage(message, channelId);
-        }
-      }
-    }, { chats: [channelId] });
-
+    return null;
   } catch (error) {
-    console.error(`❌ Ошибка при мониторинге канала ${channelId}:`, error.message);
+    console.error(`❌ Ошибка при получении сообщения из канала ${channelId}:`, error.message);
+    return null;
   }
 }
 
@@ -416,40 +402,42 @@ async function main() {
   }
 
   console.log("🎯 Бот запущен и работает...\n");
+  console.log("📝 Режим работы: поочередная обработка каналов, 1 пост за раз\n");
 
-  // Мониторинг всех каналов-источников
-  for (const channel of SOURCE_CHANNELS) {
-    try {
-      await monitorChannel(channel);
-    } catch (error) {
-      console.error(`❌ Не удалось подключиться к каналу ${channel}:`, error.message);
+  // Функция для поочередной обработки каналов
+  async function processChannelsSequentially() {
+    let currentChannelIndex = 0;
+
+    while (true) {
+      // Получаем текущий канал по кругу
+      const channelId = SOURCE_CHANNELS[currentChannelIndex];
+
+      try {
+        console.log(`\n🔍 Проверяю канал: ${channelId}`);
+
+        // Получаем последнее сообщение из канала
+        const lastMessage = await getLastMessageFromChannel(channelId);
+
+        if (lastMessage) {
+          // Пытаемся отправить сообщение (функция сама проверит на дубликаты)
+          await forwardMessage(lastMessage, channelId);
+        } else {
+          console.log(`⏭️  Нет сообщений в канале ${channelId}`);
+        }
+      } catch (error) {
+        console.error(`❌ Ошибка при обработке канала ${channelId}:`, error.message);
+      }
+
+      // Переходим к следующему каналу
+      currentChannelIndex = (currentChannelIndex + 1) % SOURCE_CHANNELS.length;
+
+      // Небольшая задержка перед проверкой следующего канала (POST_DELAY уже учтен в forwardMessage)
+      await new Promise(resolve => setTimeout(resolve, 2000)); // 2 секунды между проверками каналов
     }
   }
 
-  // Обработка новых сообщений в реальном времени
-  client.addEventHandler(async (event) => {
-    const message = event.message;
-    if (!message) return;
-
-    try {
-      const chat = await message.getChat();
-      let chatId = null;
-
-      if (chat.username) {
-        chatId = `@${chat.username}`;
-      } else if (chat.id) {
-        // Для супергрупп и каналов ID начинается с -100
-        const chatIdStr = chat.id.toString();
-        chatId = chatIdStr.startsWith('-100') ? chatIdStr : `-100${chatIdStr}`;
-      }
-
-      if (chatId && (SOURCE_CHANNELS.includes(chatId) || SOURCE_CHANNELS.includes(`@${chat.username}`))) {
-        await forwardMessage(message, chatId);
-      }
-    } catch (error) {
-      // Игнорируем ошибки для сообщений не из отслеживаемых каналов
-    }
-  }, { chats: SOURCE_CHANNELS });
+  // Запускаем поочередную обработку каналов
+  processChannelsSequentially().catch(console.error);
 }
 
 // Обработка ошибок
