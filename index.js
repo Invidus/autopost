@@ -3,6 +3,7 @@ import { StringSession } from "telegram/sessions/index.js";
 import input from "input";
 import dotenv from "dotenv";
 import fs from "fs";
+import crypto from "crypto";
 
 dotenv.config();
 
@@ -44,6 +45,68 @@ const client = new TelegramClient(stringSession, API_ID, API_HASH, {
 
 // Хранилище для отслеживания уже отправленных сообщений
 const postedMessages = new Set();
+const postedContentHashes = new Set();
+
+// Файл для сохранения хешей отправленных сообщений
+const POSTED_HASHES_FILE = "posted_hashes.json";
+
+// Загрузка сохраненных хешей при старте
+function loadPostedHashes() {
+  try {
+    if (fs.existsSync(POSTED_HASHES_FILE)) {
+      const data = fs.readFileSync(POSTED_HASHES_FILE, "utf-8");
+      const hashes = JSON.parse(data);
+      hashes.forEach(hash => postedContentHashes.add(hash));
+      console.log(`📋 Загружено ${hashes.length} хешей отправленных сообщений`);
+    }
+  } catch (error) {
+    console.error(`⚠️  Ошибка при загрузке хешей:`, error.message);
+  }
+}
+
+// Сохранение хешей в файл
+function savePostedHash(hash) {
+  try {
+    postedContentHashes.add(hash);
+    const hashesArray = Array.from(postedContentHashes);
+    // Ограничиваем размер файла (последние 10000 хешей)
+    const limitedHashes = hashesArray.slice(-10000);
+    fs.writeFileSync(POSTED_HASHES_FILE, JSON.stringify(limitedHashes, null, 2));
+  } catch (error) {
+    console.error(`⚠️  Ошибка при сохранении хеша:`, error.message);
+  }
+}
+
+// Функция для проверки существующих сообщений в целевом канале
+async function checkExistingMessagesInChannel() {
+  try {
+    console.log("🔍 Проверяю существующие сообщения в целевом канале...");
+    const messages = await client.getMessages(TARGET_CHANNEL_ID, {
+      limit: 100, // Проверяем последние 100 сообщений
+    });
+
+    let foundHashes = 0;
+    for (const msg of messages) {
+      const hash = createContentHash(msg);
+      if (hash && !postedContentHashes.has(hash)) {
+        postedContentHashes.add(hash);
+        foundHashes++;
+      }
+    }
+
+    if (foundHashes > 0) {
+      console.log(`✅ Найдено ${foundHashes} существующих сообщений в канале`);
+      // Сохраняем найденные хеши
+      const hashesArray = Array.from(postedContentHashes);
+      const limitedHashes = hashesArray.slice(-10000);
+      fs.writeFileSync(POSTED_HASHES_FILE, JSON.stringify(limitedHashes, null, 2));
+    } else {
+      console.log(`✅ Дубликатов в канале не найдено`);
+    }
+  } catch (error) {
+    console.error(`⚠️  Ошибка при проверке существующих сообщений:`, error.message);
+  }
+}
 
 // Функция для проверки ключевых слов
 function matchesFilter(text) {
@@ -107,18 +170,56 @@ function cleanTextFromLinks(text) {
   return text;
 }
 
+// Функция для создания уникального хеша из содержимого сообщения
+function createContentHash(message) {
+  const text = getMessageText(message) || "";
+  const cleanedText = cleanTextFromLinks(text).toLowerCase().trim();
+
+  let mediaId = "";
+  if (message.media && !message.media.className?.includes("MessageMediaEmpty")) {
+    // Пытаемся получить уникальный ID медиа
+    try {
+      if (message.media.photo) {
+        // Для фото используем file_id или photo_id
+        mediaId = message.media.photo.id?.toString() || "";
+      } else if (message.media.document) {
+        // Для документов используем file_id
+        mediaId = message.media.document.id?.toString() || "";
+      } else if (message.media.video) {
+        // Для видео
+        mediaId = message.media.video.id?.toString() || "";
+      }
+
+      // Если есть file_unique_id, используем его (более надежно)
+      if (message.media.fileUniqueId) {
+        mediaId = message.media.fileUniqueId;
+      }
+    } catch (e) {
+      // Если не удалось получить ID медиа, используем className
+      mediaId = message.media.className || "";
+    }
+  }
+
+  // Создаем хеш из текста и медиа
+  const contentString = `${cleanedText}|${mediaId}`;
+  return crypto.createHash("md5").update(contentString).digest("hex");
+}
+
 // Функция для форматирования текста с добавлением ссылки внизу
 function formatTextWithFooter(originalText) {
   // Очищаем текст от ссылок
   let cleanedText = cleanTextFromLinks(originalText);
 
+  // Формируем HTML ссылку для футера
+  const footerLink = `<a href="${FOOTER_LINK_URL}">${FOOTER_LINK_TEXT}</a>`;
+
   // Если текст пустой, возвращаем только футер
   if (!cleanedText || cleanedText.trim() === '') {
-    return `${FOOTER_TEXT}[${FOOTER_LINK_TEXT}](${FOOTER_LINK_URL})`;
+    return `${FOOTER_TEXT}${footerLink}`;
   }
 
-  // Добавляем футер внизу с markdown ссылкой (без пробела между текстом и ссылкой)
-  return `${cleanedText}\n\n${FOOTER_TEXT}[${FOOTER_LINK_TEXT}](${FOOTER_LINK_URL})`;
+  // Добавляем футер внизу с HTML ссылкой (без пробела между текстом и ссылкой)
+  return `${cleanedText}\n\n${FOOTER_TEXT}${footerLink}`;
 }
 
 // Функция для создания нового сообщения с копированием медиа и текста
@@ -127,12 +228,21 @@ async function forwardMessage(message, sourceChannel) {
     const messageId = message.id;
     const messageKey = `${sourceChannel}_${messageId}`;
 
-    // Проверка, не было ли уже отправлено
+    // Проверка, не было ли уже отправлено по ID сообщения
     if (postedMessages.has(messageKey)) {
       return;
     }
 
     const originalText = getMessageText(message);
+
+    // Создаем хеш содержимого для проверки дубликатов
+    const contentHash = createContentHash(message);
+
+    // Проверка на дубликат по содержимому
+    if (postedContentHashes.has(contentHash)) {
+      console.log(`⏭️  Пропущено (дубликат по содержимому): ${originalText ? originalText.substring(0, 50) + "..." : "медиа"}`);
+      return;
+    }
 
     // Проверка фильтров (по оригинальному тексту)
     if (!matchesFilter(originalText)) {
@@ -153,7 +263,7 @@ async function forwardMessage(message, sourceChannel) {
         await client.sendFile(TARGET_CHANNEL_ID, {
           file: message.media,
           caption: formattedText,
-          parseMode: "markdown", // Используем markdown для ссылок
+          parseMode: "html", // Используем HTML для ссылок (более надежно)
         });
 
         const mediaType = message.media.className || "медиа";
@@ -168,7 +278,7 @@ async function forwardMessage(message, sourceChannel) {
           await client.sendFile(TARGET_CHANNEL_ID, {
             file: mediaBuffer,
             caption: formattedText,
-            parseMode: "markdown",
+            parseMode: "html",
           });
           console.log(`✅ Отправлено (медиа скачано) из ${sourceChannel}: ${originalText ? originalText.substring(0, 50) + "..." : "медиа без текста"}`);
         } catch (downloadError) {
@@ -177,15 +287,15 @@ async function forwardMessage(message, sourceChannel) {
             try {
               await client.sendMessage(TARGET_CHANNEL_ID, {
                 message: formattedText,
-                parseMode: "markdown",
+                parseMode: "html",
               });
               console.log(`✅ Отправлено (только текст, медиа не удалось) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
             } catch (textError) {
-              // Если markdown не работает, отправляем без форматирования
+              // Если HTML не работает, отправляем без форматирования (убираем HTML теги)
               await client.sendMessage(TARGET_CHANNEL_ID, {
-                message: formattedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1'),
+                message: formattedText.replace(/<a[^>]+href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi, '$2'),
               });
-              console.log(`✅ Отправлено (только текст, без markdown) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+              console.log(`✅ Отправлено (только текст, без HTML) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
             }
           }
         }
@@ -196,20 +306,22 @@ async function forwardMessage(message, sourceChannel) {
         try {
           await client.sendMessage(TARGET_CHANNEL_ID, {
             message: formattedText,
-            parseMode: "markdown",
+            parseMode: "html",
           });
           console.log(`✅ Отправлено (текст) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
         } catch (textError) {
-          // Если markdown не работает, отправляем без форматирования
+          // Если HTML не работает, отправляем без форматирования (убираем HTML теги)
           await client.sendMessage(TARGET_CHANNEL_ID, {
-            message: formattedText.replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1'),
+            message: formattedText.replace(/<a[^>]+href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi, '$2'),
           });
-          console.log(`✅ Отправлено (текст, без markdown) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
+          console.log(`✅ Отправлено (текст, без HTML) из ${sourceChannel}: ${originalText.substring(0, 50)}...`);
         }
       }
     }
 
+    // Сохраняем информацию об отправленном сообщении
     postedMessages.add(messageKey);
+    savePostedHash(contentHash);
 
     // Ограничение размера Set (чтобы не занимать много памяти)
     if (postedMessages.size > 10000) {
@@ -261,6 +373,9 @@ async function monitorChannel(channelId) {
 async function main() {
   console.log("🚀 Запуск бота автопостинга...\n");
 
+  // Загружаем сохраненные хеши отправленных сообщений
+  loadPostedHashes();
+
   await client.start({
     phoneNumber: async () => await input.text("Введите номер телефона: "),
     password: async () => await input.text("Введите пароль (если есть): "),
@@ -285,6 +400,9 @@ async function main() {
     console.error(`❌ Ошибка доступа к целевому каналу ${TARGET_CHANNEL_ID}. Убедитесь, что бот добавлен как администратор!`);
     process.exit(1);
   }
+
+  // Проверяем существующие сообщения в целевом канале для предотвращения дубликатов
+  await checkExistingMessagesInChannel();
 
   console.log(`📋 Мониторинг каналов: ${SOURCE_CHANNELS.join(", ")}\n`);
   console.log(`⏱️  Задержка между постами: ${POST_DELAY} секунд\n`);
