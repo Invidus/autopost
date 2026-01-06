@@ -35,7 +35,7 @@ sudo npm install -g pm2
 2. **Клонирование проекта**
 ```bash
 cd /opt  # или любая другая директория
-git clone <ваш-репозиторий> autoposting-bot
+git clone https://github.com/Invidus/autopost.git autoposting-bot
 cd autoposting-bot
 ```
 

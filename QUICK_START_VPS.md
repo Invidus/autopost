@@ -23,7 +23,7 @@ sudo npm install -g pm2
 ### 3. Клонируйте проект
 ```bash
 cd /opt
-git clone <ваш-репозиторий> autoposting-bot
+git clone https://github.com/Invidus/autopost.git autoposting-bot
 cd autoposting-bot
 ```
 
@@ -95,5 +95,19 @@ pm2 list
 
 ## 🆘 Проблемы?
 
-См. подробную инструкцию в [DEPLOYMENT.md](./DEPLOYMENT.md)
+### Ошибка `ERR_UNSUPPORTED_DIR_IMPORT` при запуске?
+
+Эта ошибка исправлена в текущей версии. Если возникла:
+```bash
+# Обновите код
+git pull
+
+# Переустановите зависимости
+npm install
+```
+
+### Другие проблемы:
+
+- **Развертывание с существующим ботом?** См. [DEPLOYMENT_WITH_EXISTING_BOT.md](./DEPLOYMENT_WITH_EXISTING_BOT.md)
+- **Общая инструкция:** См. [DEPLOYMENT.md](./DEPLOYMENT.md)
 

@@ -2,11 +2,13 @@
 export default {
   apps: [{
     name: 'autoposting-bot',
-    script: './index.js',
+    script: 'index.js',
+    cwd: './',
     instances: 1,
     autorestart: true,
     watch: false,
     max_memory_restart: '500M',
+    interpreter: 'node',
     env: {
       NODE_ENV: 'production'
     },
