@@ -1,0 +1,22 @@
+[Unit]
+Description=Telegram Autoposting Bot
+After=network.target
+
+[Service]
+Type=simple
+# ВАЖНО: Замените your-username на ваше имя пользователя на VPS
+# Узнать можно командой: whoami
+User=your-username
+# ВАЖНО: Укажите правильный путь к директории проекта
+WorkingDirectory=/opt/autoposting-bot
+Environment="NODE_ENV=production"
+# Проверьте путь к node: which node
+ExecStart=/usr/bin/node /opt/autoposting-bot/index.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
