@@ -114,7 +114,7 @@ bash install.sh
 ```bash
 npm install
 npm install -g pm2
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup
 ```
@@ -131,7 +131,7 @@ pm2 startup
 
 ### Варианты развертывания:
 
-- **PM2** (рекомендуется) - см. `ecosystem.config.js`
+- **PM2** (рекомендуется) - см. `ecosystem.config.cjs`
 - **Systemd** - см. `autoposting-bot.service`
 - **Docker** - см. `Dockerfile` и `docker-compose.yml`
 

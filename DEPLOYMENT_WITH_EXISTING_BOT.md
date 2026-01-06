@@ -127,7 +127,7 @@ PM2 позволяет управлять несколькими ботами о
 
 ```bash
 # Запуск с уникальным именем
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 
 # Или вручную с явным указанием имени
 pm2 start index.js --name autoposting-bot
@@ -346,7 +346,7 @@ docker restart autoposting-bot
    Убедитесь, что вы запускаете PM2 из директории проекта:
    ```bash
    cd /opt/autoposting-bot
-   pm2 start ecosystem.config.js
+   pm2 start ecosystem.config.cjs
    # или
    pm2 start index.js --name autoposting-bot
    ```

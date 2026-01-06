@@ -65,7 +65,7 @@ nano .env
 pm2 list
 
 # Если бот НЕ запущен, сначала запустите его:
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 pm2 save
 
 # Если бот УЖЕ запущен, перезапустите:

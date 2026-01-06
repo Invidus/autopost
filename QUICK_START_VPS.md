@@ -50,7 +50,7 @@ npm start
 
 ### 7. Запуск через PM2
 ```bash
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup
 ```

@@ -22,7 +22,7 @@ git pull
 
 ```bash
 # Запуск бота
-pm2 start ecosystem.config.js
+pm2 start ecosystem.config.cjs
 
 # Сохранение конфигурации PM2
 pm2 save
@@ -33,7 +33,7 @@ pm2 startup
 ```
 
 **Если все еще ошибка "No script path":**
-- Убедитесь, что файл `ecosystem.config.js` обновлен (использует `module.exports` вместо `export default`)
+- Убедитесь, что файл `ecosystem.config.cjs` существует (расширение .cjs необходимо для CommonJS в проектах с ES modules)
 - Или используйте Вариант 2 (прямой запуск)
 
 ### Вариант 2: Запуск напрямую
