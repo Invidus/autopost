@@ -1,5 +1,5 @@
 // PM2 конфигурация для автопостинг бота
-export default {
+module.exports = {
   apps: [{
     name: 'autoposting-bot',
     script: 'index.js',

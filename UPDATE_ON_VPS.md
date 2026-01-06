@@ -61,8 +61,18 @@ nano .env
 #### Если используете PM2:
 
 ```bash
+# Проверьте, запущен ли бот
+pm2 list
+
+# Если бот НЕ запущен, сначала запустите его:
+pm2 start ecosystem.config.js
+pm2 save
+
+# Если бот УЖЕ запущен, перезапустите:
 pm2 restart autoposting-bot
 ```
+
+**⚠️ Если видите ошибку "Process not found"** - см. [FIX_PM2_START.md](./FIX_PM2_START.md)
 
 #### Если используете systemd:
 
