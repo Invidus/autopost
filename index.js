@@ -382,40 +382,51 @@ async function getChannelIdFromMessage(message) {
   }
 }
 
-// Функция для получения последнего сообщения с медиа из канала
-async function getLastMessageFromChannel(channelId) {
+// Функция для получения сообщения с медиа из канала (с учетом смещения)
+async function getMessageFromChannel(channelId, offset = 0) {
   try {
     // Нормализуем ID канала
     const normalizedChannelId = normalizeChannelId(channelId);
-    console.log(`📡 Запрос сообщений из канала: ${channelId} (нормализован: ${normalizedChannelId})`);
+
+    if (offset === 0) {
+      console.log(`📡 Проверяю последнее сообщение в канале: ${channelId} (нормализован: ${normalizedChannelId})`);
+    } else {
+      console.log(`📡 Проверяю сообщение #${offset + 1} в канале: ${channelId} (нормализован: ${normalizedChannelId})`);
+    }
 
     // Получаем entity канала для проверки доступа
     let channelEntity;
     try {
       channelEntity = await client.getEntity(normalizedChannelId);
-      console.log(`✅ Канал найден: ${channelEntity.title || channelEntity.username || normalizedChannelId}`);
+      if (offset === 0) {
+        console.log(`✅ Канал найден: ${channelEntity.title || channelEntity.username || normalizedChannelId}`);
+      }
     } catch (entityError) {
       console.error(`❌ Не удалось получить доступ к каналу ${normalizedChannelId}:`, entityError.message);
       return null;
     }
 
-    // Получаем последние сообщения (проверяем до 20, чтобы найти сообщение с медиа)
+    // Получаем сообщения с учетом смещения (берем больше, чтобы найти с медиа)
     const messages = await client.getMessages(normalizedChannelId, {
-      limit: 20,
+      limit: 50, // Берем до 50, чтобы найти сообщение с медиа
     });
 
     if (messages && messages.length > 0) {
-      // Ищем первое сообщение с медиа (фото, видео, документ и т.д.)
-      for (const message of messages) {
+      // Ищем сообщение с медиа, начиная с позиции offset
+      let checkedCount = 0;
+      for (let i = offset; i < messages.length && checkedCount < 10; i++) {
+        const message = messages[i];
+        checkedCount++;
+
         // Проверяем, что сообщение действительно из нужного канала
         const messageChannelId = await getChannelIdFromMessage(message);
         const normalizedMessageChannelId = normalizeChannelId(messageChannelId);
 
         if (normalizedMessageChannelId !== normalizedChannelId) {
-          console.log(`⚠️  Сообщение из другого канала (${normalizedMessageChannelId} вместо ${normalizedChannelId}), пропускаю`);
           continue;
         }
 
+        // Проверяем наличие медиа (фото, видео, документ)
         const hasMedia = message.media && !message.media.className?.includes("MessageMediaEmpty");
 
         if (hasMedia) {
@@ -426,16 +437,40 @@ async function getLastMessageFromChannel(channelId) {
           if (mediaType.includes("Photo") ||
               mediaType.includes("Video") ||
               mediaType.includes("Document")) {
-            console.log(`✅ Найдено сообщение с медиа (${mediaType}) из канала ${normalizedChannelId}`);
-            return message;
+
+            // Проверяем на дубликат (по хешу содержимого и ID)
+            const contentHash = createContentHash(message);
+            const messageKey = `${normalizedChannelId}_${message.id}`;
+
+            // Проверяем по ID сообщения
+            if (postedMessages.has(messageKey)) {
+              // Это дубликат, продолжаем поиск
+              continue;
+            }
+
+            // Проверяем по хешу содержимого
+            if (postedContentHashes.has(contentHash)) {
+              // Это дубликат, продолжаем поиск
+              continue;
+            }
+
+            // Нашли новое сообщение с медиа, которое еще не публиковалось
+            console.log(`✅ Найдено новое сообщение с медиа (${mediaType}) из канала ${normalizedChannelId}, ID: ${message.id}, позиция: ${i}`);
+            return { message, nextOffset: i + 1 };
           }
         }
       }
 
-      // Если не нашли сообщение с медиа, возвращаем null
-      console.log(`⚠️  В канале ${normalizedChannelId} не найдено сообщений с медиа (фото/видео) среди последних 20`);
+      // Не нашли новое сообщение с медиа в этом диапазоне
+      if (offset === 0) {
+        console.log(`⚠️  Последнее сообщение в канале ${normalizedChannelId} уже опубликовано или не содержит медиа`);
+      } else {
+        console.log(`⚠️  Не найдено новых сообщений с медиа в канале ${normalizedChannelId} начиная с позиции ${offset}`);
+      }
       return null;
     }
+
+    console.log(`⚠️  В канале ${normalizedChannelId} нет сообщений`);
     return null;
   } catch (error) {
     console.error(`❌ Ошибка при получении сообщения из канала ${channelId}:`, error.message);
@@ -499,39 +534,59 @@ async function main() {
   // Функция для поочередной обработки каналов
   async function processChannelsSequentially() {
     let currentChannelIndex = 0;
+    // Храним смещение для каждого канала (сколько сообщений уже проверили)
+    const channelOffsets = new Map();
 
     while (true) {
       // Получаем текущий канал по кругу
       const channelId = SOURCE_CHANNELS[currentChannelIndex];
       const normalizedChannelId = normalizedSourceChannels[currentChannelIndex];
 
+      // Получаем текущее смещение для этого канала (или 0, если еще не проверяли)
+      const currentOffset = channelOffsets.get(normalizedChannelId) || 0;
+
       try {
         console.log(`\n🔍 Проверяю канал: ${channelId} (нормализован: ${normalizedChannelId})`);
 
-        // Получаем последнее сообщение с медиа (фото/видео) из канала
-        const lastMessage = await getLastMessageFromChannel(channelId);
+        // Получаем сообщение с медиа из канала (с учетом смещения)
+        const result = await getMessageFromChannel(channelId, currentOffset);
 
-        if (lastMessage) {
+        if (result && result.message) {
+          const message = result.message;
+
           // Дополнительная проверка: убеждаемся, что сообщение из нужного канала
-          const messageChannelId = await getChannelIdFromMessage(lastMessage);
+          const messageChannelId = await getChannelIdFromMessage(message);
           const normalizedMessageChannelId = normalizeChannelId(messageChannelId);
 
           if (normalizedMessageChannelId !== normalizedChannelId) {
             console.error(`❌ ОШИБКА: Сообщение из канала ${normalizedMessageChannelId}, а ожидался ${normalizedChannelId}! Пропускаю.`);
+            // Увеличиваем смещение для этого канала
+            channelOffsets.set(normalizedChannelId, result.nextOffset || currentOffset + 1);
           } else {
-            console.log(`✅ Подтверждено: сообщение из канала ${normalizedChannelId}`);
-            // Пытаемся отправить сообщение (функция сама проверит на дубликаты)
-            await forwardMessage(lastMessage, normalizedChannelId);
+            console.log(`✅ Подтверждено: новое сообщение из канала ${normalizedChannelId}, отправляю...`);
+            // Отправляем сообщение (функция сама сохранит хеш)
+            await forwardMessage(message, normalizedChannelId);
+            // Обновляем смещение для этого канала (следующий раз начнем с этой позиции)
+            channelOffsets.set(normalizedChannelId, result.nextOffset || currentOffset + 1);
           }
         } else {
-          console.log(`⏭️  Нет сообщений с медиа (фото/видео) в канале ${normalizedChannelId}, пропускаю...`);
+          // Не нашли новое сообщение, увеличиваем смещение для следующего прохода
+          channelOffsets.set(normalizedChannelId, currentOffset + 1);
+          console.log(`⏭️  Сообщение из канала ${normalizedChannelId} уже опубликовано или не содержит медиа, перехожу к следующему каналу...`);
         }
       } catch (error) {
         console.error(`❌ Ошибка при обработке канала ${normalizedChannelId}:`, error.message);
+        // При ошибке тоже увеличиваем смещение, чтобы не застрять
+        channelOffsets.set(normalizedChannelId, currentOffset + 1);
       }
 
       // Переходим к следующему каналу
       currentChannelIndex = (currentChannelIndex + 1) % SOURCE_CHANNELS.length;
+
+      // Если прошли все каналы, сбрасываем смещения для нового цикла (начинаем с более старых сообщений)
+      if (currentChannelIndex === 0) {
+        console.log(`\n🔄 Завершен цикл по всем каналам, начинаю новый цикл с более старыми сообщениями...\n`);
+      }
 
       // Небольшая задержка перед проверкой следующего канала (POST_DELAY уже учтен в forwardMessage)
       await new Promise(resolve => setTimeout(resolve, 2000)); // 2 секунды между проверками каналов
