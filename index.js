@@ -337,17 +337,85 @@ async function forwardMessage(message, sourceChannel) {
   }
 }
 
+// Функция для нормализации ID канала (приведение к единому формату)
+function normalizeChannelId(channelId) {
+  if (!channelId) return null;
+
+  // Если это username (начинается с @)
+  if (channelId.startsWith('@')) {
+    return channelId.toLowerCase();
+  }
+
+  // Если это числовой ID
+  if (channelId.startsWith('-100')) {
+    return channelId;
+  }
+
+  // Если это просто число, добавляем префикс -100
+  if (/^-?\d+$/.test(channelId)) {
+    return channelId.startsWith('-') ? channelId : `-100${channelId}`;
+  }
+
+  return channelId;
+}
+
+// Функция для получения реального ID канала из сообщения
+async function getChannelIdFromMessage(message) {
+  try {
+    if (!message || !message.peerId) return null;
+
+    // Получаем информацию о чате
+    const chat = await message.getChat();
+
+    if (chat.username) {
+      return `@${chat.username}`.toLowerCase();
+    }
+
+    if (chat.id) {
+      const chatIdStr = chat.id.toString();
+      return chatIdStr.startsWith('-100') ? chatIdStr : `-100${chatIdStr}`;
+    }
+
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
 // Функция для получения последнего сообщения с медиа из канала
 async function getLastMessageFromChannel(channelId) {
   try {
+    // Нормализуем ID канала
+    const normalizedChannelId = normalizeChannelId(channelId);
+    console.log(`📡 Запрос сообщений из канала: ${channelId} (нормализован: ${normalizedChannelId})`);
+
+    // Получаем entity канала для проверки доступа
+    let channelEntity;
+    try {
+      channelEntity = await client.getEntity(normalizedChannelId);
+      console.log(`✅ Канал найден: ${channelEntity.title || channelEntity.username || normalizedChannelId}`);
+    } catch (entityError) {
+      console.error(`❌ Не удалось получить доступ к каналу ${normalizedChannelId}:`, entityError.message);
+      return null;
+    }
+
     // Получаем последние сообщения (проверяем до 20, чтобы найти сообщение с медиа)
-    const messages = await client.getMessages(channelId, {
+    const messages = await client.getMessages(normalizedChannelId, {
       limit: 20,
     });
 
     if (messages && messages.length > 0) {
       // Ищем первое сообщение с медиа (фото, видео, документ и т.д.)
       for (const message of messages) {
+        // Проверяем, что сообщение действительно из нужного канала
+        const messageChannelId = await getChannelIdFromMessage(message);
+        const normalizedMessageChannelId = normalizeChannelId(messageChannelId);
+
+        if (normalizedMessageChannelId !== normalizedChannelId) {
+          console.log(`⚠️  Сообщение из другого канала (${normalizedMessageChannelId} вместо ${normalizedChannelId}), пропускаю`);
+          continue;
+        }
+
         const hasMedia = message.media && !message.media.className?.includes("MessageMediaEmpty");
 
         if (hasMedia) {
@@ -358,13 +426,14 @@ async function getLastMessageFromChannel(channelId) {
           if (mediaType.includes("Photo") ||
               mediaType.includes("Video") ||
               mediaType.includes("Document")) {
+            console.log(`✅ Найдено сообщение с медиа (${mediaType}) из канала ${normalizedChannelId}`);
             return message;
           }
         }
       }
 
       // Если не нашли сообщение с медиа, возвращаем null
-      console.log(`⚠️  В канале ${channelId} не найдено сообщений с медиа (фото/видео) среди последних 20`);
+      console.log(`⚠️  В канале ${normalizedChannelId} не найдено сообщений с медиа (фото/видео) среди последних 20`);
       return null;
     }
     return null;
@@ -423,6 +492,10 @@ async function main() {
   console.log("🎯 Бот запущен и работает...\n");
   console.log("📝 Режим работы: поочередная обработка каналов, 1 пост за раз\n");
 
+  // Нормализуем все ID каналов-источников
+  const normalizedSourceChannels = SOURCE_CHANNELS.map(ch => normalizeChannelId(ch));
+  console.log(`📋 Нормализованные каналы-источники: ${normalizedSourceChannels.join(", ")}\n`);
+
   // Функция для поочередной обработки каналов
   async function processChannelsSequentially() {
     let currentChannelIndex = 0;
@@ -430,21 +503,31 @@ async function main() {
     while (true) {
       // Получаем текущий канал по кругу
       const channelId = SOURCE_CHANNELS[currentChannelIndex];
+      const normalizedChannelId = normalizedSourceChannels[currentChannelIndex];
 
       try {
-        console.log(`\n🔍 Проверяю канал: ${channelId}`);
+        console.log(`\n🔍 Проверяю канал: ${channelId} (нормализован: ${normalizedChannelId})`);
 
         // Получаем последнее сообщение с медиа (фото/видео) из канала
         const lastMessage = await getLastMessageFromChannel(channelId);
 
         if (lastMessage) {
-          // Пытаемся отправить сообщение (функция сама проверит на дубликаты)
-          await forwardMessage(lastMessage, channelId);
+          // Дополнительная проверка: убеждаемся, что сообщение из нужного канала
+          const messageChannelId = await getChannelIdFromMessage(lastMessage);
+          const normalizedMessageChannelId = normalizeChannelId(messageChannelId);
+
+          if (normalizedMessageChannelId !== normalizedChannelId) {
+            console.error(`❌ ОШИБКА: Сообщение из канала ${normalizedMessageChannelId}, а ожидался ${normalizedChannelId}! Пропускаю.`);
+          } else {
+            console.log(`✅ Подтверждено: сообщение из канала ${normalizedChannelId}`);
+            // Пытаемся отправить сообщение (функция сама проверит на дубликаты)
+            await forwardMessage(lastMessage, normalizedChannelId);
+          }
         } else {
-          console.log(`⏭️  Нет сообщений с медиа (фото/видео) в канале ${channelId}, пропускаю...`);
+          console.log(`⏭️  Нет сообщений с медиа (фото/видео) в канале ${normalizedChannelId}, пропускаю...`);
         }
       } catch (error) {
-        console.error(`❌ Ошибка при обработке канала ${channelId}:`, error.message);
+        console.error(`❌ Ошибка при обработке канала ${normalizedChannelId}:`, error.message);
       }
 
       // Переходим к следующему каналу
